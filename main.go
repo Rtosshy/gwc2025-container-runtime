@@ -50,6 +50,10 @@ func main() {
 		if err := runCommand(c); err != nil {
 			log.Fatalln(errors.StackTraces(err))
 		}
+	case "init":
+		if err := initCommand(c); err != nil {
+			log.Fatalln(errors.StackTraces(err))
+		}
 
 	default:
 		log.Fatalf("unknown command: %s", os.Args[1])
@@ -63,18 +67,37 @@ func runCommand(c Config) error {
 		return errors.WithStack(err)
 	}
 
+	cmd := exec.Command("/proc/self/exe", "init")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+
+	// PID Namespaceを分ける
+	cmd.SysProcAttr = &unix.SysProcAttr{Cloneflags: unix.CLONE_NEWPID}
+
+	if err := cmd.Run(); err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+// initサブコマンド
+func initCommand(c Config) error {
+	// 残りのNamespaceの分割
+	if err := unix.Unshare(unix.CLONE_NEWUTS | unix.CLONE_NEWNS); err != nil {
+		return errors.WithStack(err)
+	}
+
 	// rootfsの設定
-	_ = unix.Unshare(unix.CLONE_NEWNS) // rootfsで使うので、Namespace系の処理だが仮置き
 	if err := SetupRootfs(c.Rootfs); err != nil {
 		return errors.WithStack(err)
 	}
 
 	// 作成した簡易コンテナ内でエントリーポイントを実行
-	cmd := exec.Command(c.EntryPoint[0], c.EntryPoint[1:]...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
+	cmdAbsPath, err := exec.LookPath(c.EntryPoint[0])
+	if err != nil {
 		return errors.WithStack(err)
 	}
-
+	if err := unix.Exec(cmdAbsPath, c.EntryPoint, os.Environ()); err != nil {
+		return errors.WithStack(err)
+	}
 	return nil
 }
